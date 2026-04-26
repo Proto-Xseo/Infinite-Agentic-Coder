@@ -9,6 +9,7 @@ import {
   Square,
   ListTodo,
   Trash2,
+  PanelRightClose,
 } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -55,9 +56,15 @@ type Todo = { text: string; done: boolean };
 export function SandboxPanel({
   conversationId,
   refreshKey,
+  onClose,
+  width,
+  focusFile,
 }: {
   conversationId: number | null;
   refreshKey: number;
+  onClose?: () => void;
+  width?: number;
+  focusFile?: string | null;
 }) {
   const [tree, setTree] = useState<Node[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -109,42 +116,67 @@ export function SandboxPanel({
     }
   };
 
-  const openFile = async (p: string) => {
-    if (!conversationId) return;
-    try {
-      const r = await fetch(
-        apiUrl(`/anthropic/conversations/${conversationId}/sandbox/file?path=${encodeURIComponent(p)}`),
-      ).then((x) => x.json());
-      if (r.error) return;
-      setOpened({ path: r.path, content: r.content, size: r.size });
-    } catch {
-      // ignore
+  const openFile = useCallback(
+    async (p: string) => {
+      if (!conversationId) return;
+      try {
+        const r = await fetch(
+          apiUrl(
+            `/anthropic/conversations/${conversationId}/sandbox/file?path=${encodeURIComponent(p)}`,
+          ),
+        ).then((x) => x.json());
+        if (r.error) return;
+        setOpened({ path: r.path, content: r.content, size: r.size });
+      } catch {
+        // ignore
+      }
+    },
+    [conversationId],
+  );
+
+  // Auto-open the most recently touched file (passed in from ChatPage)
+  useEffect(() => {
+    if (focusFile && conversationId) {
+      openFile(focusFile);
     }
-  };
+  }, [focusFile, conversationId, refreshKey, openFile]);
 
   return (
-    <aside className="hidden h-full w-80 shrink-0 flex-col border-l border-border bg-card/30 lg:flex">
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+    <aside
+      style={{ width: width ?? 320 }}
+      className="relative hidden h-[calc(100%-1.5rem)] shrink-0 my-3 mr-3 flex-col overflow-hidden rounded-2xl border border-border/70 bg-gradient-to-b from-card/60 to-card/30 shadow-[0_2px_24px_-8px_rgba(0,0,0,0.4)] backdrop-blur lg:flex"
+    >
+      <div className="flex items-center justify-between border-b border-border/60 px-3.5 py-2.5">
+        <div className="flex items-center gap-2 text-[13px] font-semibold tracking-tight text-foreground/95">
           <Folder className="h-3.5 w-3.5 text-accent" />
-          Sandbox
+          Content
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5">
           <button
             onClick={refresh}
-            className="hover-elevate rounded p-1 text-muted-foreground"
+            className="hover-elevate rounded-md p-1 text-muted-foreground"
             title="Refresh"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
           </button>
           <button
             onClick={resetSandbox}
-            className="hover-elevate rounded p-1 text-muted-foreground hover:text-destructive"
+            className="hover-elevate rounded-md p-1 text-muted-foreground hover:text-destructive"
             title="Wipe sandbox"
             disabled={!conversationId}
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
+          {onClose ? (
+            <button
+              onClick={onClose}
+              className="hover-elevate rounded-md p-1 text-muted-foreground"
+              title="Hide panel"
+              aria-label="Hide content panel"
+            >
+              <PanelRightClose className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
         </div>
       </div>
 

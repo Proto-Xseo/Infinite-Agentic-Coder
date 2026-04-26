@@ -1,14 +1,18 @@
 import Anthropic from "@anthropic-ai/sdk";
 
-if (!process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL) {
+if (!process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL || !process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY) {
   throw new Error(
-    "AI_INTEGRATIONS_ANTHROPIC_BASE_URL must be set. Did you forget to provision the Anthropic AI integration?",
-  );
-}
-
-if (!process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY) {
-  throw new Error(
-    "AI_INTEGRATIONS_ANTHROPIC_API_KEY must be set. Did you forget to provision the Anthropic AI integration?",
+    [
+      "Anthropic AI integration is not provisioned in this workspace.",
+      "",
+      "Fix in one step: open the Replit chat and tell the agent:",
+      "    \"set up the Anthropic integration\"",
+      "",
+      "The agent will run setupReplitAIIntegrations({ integrations: ['anthropic'] })",
+      "and the env vars AI_INTEGRATIONS_ANTHROPIC_BASE_URL and",
+      "AI_INTEGRATIONS_ANTHROPIC_API_KEY will be set automatically. Then restart",
+      "the API Server workflow. Full instructions in SETUP.md.",
+    ].join("\n"),
   );
 }
 

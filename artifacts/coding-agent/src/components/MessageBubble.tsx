@@ -1,4 +1,5 @@
-import { Bot, User, Sparkles } from "lucide-react";
+import { useState } from "react";
+import { User, Sparkles, Copy, Check, ThumbsUp, ThumbsDown, RefreshCw } from "lucide-react";
 import { Markdown } from "./Markdown";
 
 export type Role = "user" | "assistant" | "subagent" | "system" | "tool";
@@ -18,6 +19,7 @@ export function MessageBubble({
 }) {
   const content = text ?? "";
   const showMarkdown = typeof text === "string";
+  const [copied, setCopied] = useState(false);
 
   if (role === "user") {
     return (
@@ -37,45 +39,91 @@ export function MessageBubble({
   }
 
   if (role === "subagent") {
+    const empty = !content;
     return (
-      <div className="flex justify-start">
-        <div className="flex max-w-[92%] gap-3">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-accent-border bg-accent/10 text-accent">
-            <Sparkles className="h-4 w-4" />
-          </div>
-          <div className="flex-1 rounded-2xl rounded-tl-sm border border-card-border bg-card px-4 py-3 shadow-sm">
-            <div className="mb-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-accent">
-              Subagent
-              {subagentTask && (
-                <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal text-accent">
-                  {subagentTask}
-                </span>
-              )}
-            </div>
-            <div className="text-sm leading-relaxed text-card-foreground">
-              {showMarkdown ? <Markdown>{content || (streaming ? "Working…" : "")}</Markdown> : children}
-              {streaming && <span className="ml-1 inline-block h-3 w-1.5 animate-pulse bg-accent align-middle" />}
-            </div>
-          </div>
+      <div className="px-1 fade-in-up">
+        <div className="mb-1 flex items-center gap-1.5 text-[12px] text-accent/90">
+          <Sparkles className="h-3.5 w-3.5" />
+          {subagentTask ? <span>{subagentTask}</span> : <span>Subagent</span>}
+        </div>
+        <div className="text-[14.5px] leading-relaxed text-foreground/95">
+          {empty && streaming ? (
+            <span className="shimmer-text">Working…</span>
+          ) : showMarkdown ? (
+            <Markdown>{content}</Markdown>
+          ) : (
+            children
+          )}
+          {streaming && !empty && (
+            <span className="ml-1 inline-block h-3.5 w-[6px] animate-pulse bg-accent align-middle" />
+          )}
         </div>
       </div>
     );
   }
 
-  // assistant
+  // assistant — INLINE (no box) per Claude desktop style
+  const empty = !content;
+  const showActions = !empty && !streaming;
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch {
+      // ignore
+    }
+  };
   return (
-    <div className="flex justify-start">
-      <div className="flex max-w-[92%] gap-3">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-primary-border bg-primary text-primary-foreground">
-          <Bot className="h-4 w-4" />
+    <div className="group/msg px-1 text-[14.5px] leading-relaxed text-foreground/95 fade-in-up">
+      {empty && streaming ? (
+        <span className="shimmer-text">Thinking…</span>
+      ) : showMarkdown ? (
+        <Markdown>{content}</Markdown>
+      ) : (
+        children
+      )}
+      {streaming && !empty && (
+        <span className="ml-1 inline-block h-3.5 w-[6px] animate-pulse bg-primary align-middle" />
+      )}
+      {showActions ? (
+        <div className="mt-2 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100">
+          <ActionBtn label={copied ? "Copied" : "Copy"} onClick={onCopy}>
+            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+          </ActionBtn>
+          <ActionBtn label="Good response">
+            <ThumbsUp className="h-3.5 w-3.5" />
+          </ActionBtn>
+          <ActionBtn label="Bad response">
+            <ThumbsDown className="h-3.5 w-3.5" />
+          </ActionBtn>
+          <ActionBtn label="Retry">
+            <RefreshCw className="h-3.5 w-3.5" />
+          </ActionBtn>
         </div>
-        <div className="flex-1 rounded-2xl rounded-tl-sm border border-card-border bg-card px-4 py-3 shadow-sm">
-          <div className="text-sm leading-relaxed text-card-foreground">
-            {showMarkdown ? <Markdown>{content || (streaming ? "Thinking…" : "")}</Markdown> : children}
-            {streaming && <span className="ml-1 inline-block h-3 w-1.5 animate-pulse bg-primary align-middle" />}
-          </div>
-        </div>
-      </div>
+      ) : null}
     </div>
+  );
+}
+
+function ActionBtn({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick?: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className="hover-elevate active-elevate-2 inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition hover:text-foreground"
+    >
+      {children}
+    </button>
   );
 }

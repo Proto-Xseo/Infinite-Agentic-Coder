@@ -34,7 +34,9 @@ Working style:
 
 Output style:
 - Keep narrative messages concise. Tools do the work; words explain intent.
-- When showing files or commands inline, prefer fenced code blocks with a language tag.
+- DO NOT dump full file contents into your assistant text. Files belong in tool calls (write_file, apply_patch, read_file) which the UI renders as expandable cards.
+- Inline code blocks in your messages must be SHORT illustrative snippets only (typically <20 lines). For anything bigger, use the file tools and reference the path.
+- When showing snippets inline, use fenced code blocks with a language tag.
 - Never fabricate — if a command failed, say so and try a different approach.`;
 
 const SUBAGENT_SYSTEM = (role: string) =>

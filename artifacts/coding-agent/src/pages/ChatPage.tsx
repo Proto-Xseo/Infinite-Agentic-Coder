@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
-import { Sparkles } from "lucide-react";
+import { PanelLeft } from "lucide-react";
 import {
   useGetAnthropicConversation,
   getGetAnthropicConversationQueryKey,
@@ -14,6 +14,20 @@ import { ToolCard } from "../components/ToolCard";
 import { ChatInput } from "../components/ChatInput";
 import { SandboxPanel } from "../components/SandboxPanel";
 import { apiUrl } from "../lib/api-base";
+import { useListAnthropicConversations } from "@workspace/api-client-react";
+import {
+  MessageSquare,
+  Sparkles,
+  PanelRight,
+  Pencil,
+  GraduationCap,
+  Code2,
+  Coffee,
+  Wand2,
+  Bug,
+  TestTube,
+  FileText as FileIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
 type StreamItem =
@@ -34,6 +48,23 @@ export default function ChatPage() {
   const [, navigate] = useLocation();
   const qc = useQueryClient();
   const conversationId = params.id ? Number(params.id) : null;
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [contentOpen, setContentOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const v = Number(localStorage.getItem("coding-agent.sidebarWidth"));
+    return Number.isFinite(v) && v >= 200 && v <= 480 ? v : 256;
+  });
+  const [contentWidth, setContentWidth] = useState<number>(() => {
+    const v = Number(localStorage.getItem("coding-agent.contentWidth"));
+    return Number.isFinite(v) && v >= 260 && v <= 720 ? v : 360;
+  });
+  useEffect(() => {
+    localStorage.setItem("coding-agent.sidebarWidth", String(sidebarWidth));
+  }, [sidebarWidth]);
+  useEffect(() => {
+    localStorage.setItem("coding-agent.contentWidth", String(contentWidth));
+  }, [contentWidth]);
+  const [focusFile, setFocusFile] = useState<string | null>(null);
 
   const { data: conversation } = useGetAnthropicConversation(
     conversationId ?? 0,
@@ -79,7 +110,6 @@ export default function ChatPage() {
         return { kind: "message", role: "subagent", text: m.content };
       }
       if (m.role === "tool") {
-        // [name] {input}\n---\noutput
         const match = /^\[([^\]]+)\]\s*(\{[\s\S]*?\})\n---\n([\s\S]*)$/.exec(m.content);
         if (match) {
           let input: Record<string, unknown> = {};
@@ -111,6 +141,7 @@ export default function ChatPage() {
   }, [conversation?.messages]);
 
   const allItems = useMemo(() => [...persistedItems, ...liveItems], [persistedItems, liveItems]);
+  const isEmpty = allItems.length === 0;
 
   const handleSend = async (text: string) => {
     let activeId = conversationId;
@@ -241,7 +272,6 @@ export default function ChatPage() {
               : it,
           ),
         );
-        // refresh sandbox panel after any tool that may mutate the filesystem
         const t = String(evt.tool ?? "");
         if (
           t === "write_file" ||
@@ -253,6 +283,14 @@ export default function ChatPage() {
           t === "todo_write"
         ) {
           setSandboxRefresh((v) => v + 1);
+        }
+        // Auto-focus the right Content panel on the file the agent just touched
+        if (t === "write_file" || t === "apply_patch" || t === "read_file") {
+          const findInput = (() => {
+            const cur = (evt.input as Record<string, unknown> | undefined) ?? {};
+            return (cur.path as string) ?? (cur.file as string) ?? "";
+          })();
+          if (findInput) setFocusFile(findInput);
         }
         startNewAssistantBubble();
       } else if (type === "subagent_start") {
@@ -322,139 +360,338 @@ export default function ChatPage() {
     }
   };
 
+  const onExample = (text: string) => handleSend(text);
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
-      <ConversationSidebar activeId={conversationId} />
-      <main className="relative flex flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-border bg-card/50 px-6 py-3 backdrop-blur">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-primary" />
-            <h1 className="text-sm font-semibold">
-              {conversation?.title ?? (conversationId ? "Loading…" : "New chat")}
-            </h1>
+      {sidebarOpen ? (
+        <>
+          <ConversationSidebar
+            activeId={conversationId}
+            onClose={() => setSidebarOpen(false)}
+            width={sidebarWidth}
+          />
+          <ResizeHandle
+            onResize={(dx) =>
+              setSidebarWidth((w) => Math.min(480, Math.max(200, w + dx)))
+            }
+            title="Drag to resize sidebar"
+          />
+        </>
+      ) : null}
+      <main className="relative flex flex-1 flex-col dotted-bg">
+        {/* Window-chrome style title bar */}
+        <header className="relative flex h-9 shrink-0 items-center border-b border-border/60 bg-background/40 backdrop-blur">
+          <button
+            onClick={() => setSidebarOpen((v) => !v)}
+            className="hover-elevate active-elevate-2 absolute left-2 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition"
+            aria-label="Toggle sidebar"
+            title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+          >
+            <PanelLeft className="h-4 w-4" />
+          </button>
+          <div className="flex w-full items-center justify-center text-[11px] font-medium tracking-wide text-muted-foreground">
+            Claude Code — {conversation?.title ?? (conversationId ? "Loading…" : "New chat")}
           </div>
-          <div className="text-[11px] text-muted-foreground">
-            Agent: <span className="font-mono text-foreground/80">claude-sonnet-4-6</span>
-            <span className="mx-2 text-border">•</span>
-            <span className="text-foreground/60">tools: read/write/shell/grep/subagent</span>
-          </div>
+          {!contentOpen ? (
+            <button
+              onClick={() => setContentOpen(true)}
+              className="hover-elevate active-elevate-2 absolute right-2 hidden h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition lg:flex"
+              aria-label="Show content panel"
+              title="Show content panel"
+            >
+              <PanelRight className="h-4 w-4" />
+            </button>
+          ) : null}
         </header>
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto nice-scroll">
-          <div className="mx-auto max-w-3xl space-y-3 px-4 py-8">
-            {allItems.length === 0 ? (
-              <EmptyState />
-            ) : (
-              allItems.map((it, i) => {
-                if (it.kind === "tool") {
+        {isEmpty ? (
+          <EmptyHero disabled={streaming} onSend={handleSend} onExample={onExample} onStop={() => abortRef.current?.abort()} />
+        ) : (
+          <>
+            <div ref={scrollRef} className="flex-1 overflow-y-auto nice-scroll">
+              <div className="mx-auto max-w-3xl space-y-3 px-4 py-8">
+                {allItems.map((it, i) => {
+                  if (it.kind === "tool") {
+                    return (
+                      <ToolCard
+                        key={`${it.id}-${i}`}
+                        tool={it.tool}
+                        input={it.input}
+                        output={it.output}
+                        status={it.status}
+                        scope={it.scope}
+                        subagentRole={it.subagentRole}
+                      />
+                    );
+                  }
+                  if (it.kind === "message" && it.role === "assistant" && !it.text && !streaming) {
+                    return null;
+                  }
+                  const isLast = i === allItems.length - 1;
                   return (
-                    <ToolCard
-                      key={`${it.id}-${i}`}
-                      tool={it.tool}
-                      input={it.input}
-                      output={it.output}
-                      status={it.status}
-                      scope={it.scope}
-                      subagentRole={it.subagentRole}
+                    <MessageBubble
+                      key={i}
+                      role={it.role}
+                      text={it.text}
+                      subagentTask={it.subagentTask}
+                      streaming={
+                        streaming && isLast && (it.role === "assistant" || it.role === "subagent")
+                      }
                     />
                   );
-                }
-                if (it.kind === "message" && it.role === "assistant" && !it.text && !streaming) {
-                  return null;
-                }
-                const isLast = i === allItems.length - 1;
-                return (
-                  <MessageBubble
-                    key={i}
-                    role={it.role}
-                    text={it.text}
-                    subagentTask={it.subagentTask}
-                    streaming={
-                      streaming && isLast && (it.role === "assistant" || it.role === "subagent")
-                    }
-                  />
-                );
-              })
-            )}
+                })}
+              </div>
+            </div>
+
+            <ChatInput
+              onSend={handleSend}
+              onStop={() => abortRef.current?.abort()}
+              disabled={streaming}
+              placeholder={
+                conversationId
+                  ? "Reply to the agent…"
+                  : "Find a small todo in the codebase and do it"
+              }
+            />
+          </>
+        )}
+      </main>
+      {contentOpen ? (
+        <>
+          <ResizeHandle
+            onResize={(dx) =>
+              setContentWidth((w) => Math.min(720, Math.max(260, w - dx)))
+            }
+            title="Drag to resize content panel"
+          />
+          <SandboxPanel
+            conversationId={conversationId}
+            refreshKey={sandboxRefresh}
+            onClose={() => setContentOpen(false)}
+            width={contentWidth}
+            focusFile={focusFile}
+          />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function ResizeHandle({
+  onResize,
+  title,
+}: {
+  onResize: (dx: number) => void;
+  title?: string;
+}) {
+  const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    if (!dragging) return;
+    let last = 0;
+    let pending = 0;
+    let raf = 0;
+    const flush = () => {
+      raf = 0;
+      if (pending !== 0) {
+        onResize(pending);
+        pending = 0;
+      }
+    };
+    const onMove = (e: MouseEvent) => {
+      if (last === 0) {
+        last = e.clientX;
+        return;
+      }
+      const dx = e.clientX - last;
+      last = e.clientX;
+      pending += dx;
+      if (!raf) raf = requestAnimationFrame(flush);
+    };
+    const onUp = () => setDragging(false);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      if (raf) cancelAnimationFrame(raf);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [dragging, onResize]);
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      title={title}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        setDragging(true);
+      }}
+      className={`group relative h-full w-1.5 shrink-0 cursor-col-resize transition ${
+        dragging ? "bg-primary/30" : "hover:bg-primary/15"
+      }`}
+    >
+      <span
+        className={`pointer-events-none absolute left-1/2 top-1/2 h-10 -translate-x-1/2 -translate-y-1/2 rounded-full transition ${
+          dragging ? "w-1 bg-primary" : "w-0.5 bg-border group-hover:bg-primary/60"
+        }`}
+      />
+    </div>
+  );
+}
+
+function greeting(): string {
+  const h = new Date().getHours();
+  if (h < 5) return "Good night";
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  if (h < 22) return "Good evening";
+  return "Good night";
+}
+
+function relativeTime(iso: string | Date | null | undefined): string {
+  if (!iso) return "";
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  const sec = Math.max(1, Math.floor((Date.now() - d.getTime()) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  return d.toLocaleDateString();
+}
+
+function EmptyHero({
+  disabled,
+  onSend,
+  onExample,
+  onStop,
+}: {
+  disabled?: boolean;
+  onSend: (t: string) => void;
+  onExample: (t: string) => void;
+  onStop?: () => void;
+}) {
+  const [, navigate] = useLocation();
+  const { data: convs } = useListAnthropicConversations();
+  const recentsRaw = Array.isArray(convs)
+    ? convs
+    : Array.isArray((convs as { items?: unknown })?.items)
+      ? ((convs as { items: Array<{ id: number; title: string; updatedAt?: string; createdAt?: string }> }).items)
+      : [];
+  const recents = recentsRaw.slice(0, 6);
+
+  const examples: Array<{ before: string; pill: string; after: string }> = [
+    { before: "Create or update my ", pill: "CLAUDE.MD", after: " file" },
+    { before: "Search for a ", pill: "TODO", after: " comment and fix it" },
+    { before: "Recommend areas to improve our ", pill: "tests", after: "" },
+  ];
+
+  return (
+    <div className="flex-1 overflow-y-auto nice-scroll">
+      <div className="mx-auto w-full max-w-3xl px-6 pt-20 pb-12">
+        {/* Plan badge */}
+        <div className="mb-6 flex justify-center">
+          <div className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/40 px-3 py-1 text-[11px] text-muted-foreground backdrop-blur">
+            <span>Free plan</span>
+            <span className="opacity-50">·</span>
+            <span className="text-foreground/85">Replit AI · Anthropic proxy</span>
           </div>
+        </div>
+
+        {/* Hero — sparkle + greeting */}
+        <div className="mb-8 flex items-center justify-center gap-3">
+          <Sparkles className="h-6 w-6 text-primary" strokeWidth={2.2} />
+          <h1 className="text-[26px] font-medium tracking-tight text-foreground">
+            {greeting()}
+          </h1>
         </div>
 
         <ChatInput
-          onSend={handleSend}
-          onStop={() => abortRef.current?.abort()}
-          disabled={streaming}
-          placeholder={
-            conversationId
-              ? "Reply to the agent…"
-              : "Ask the coding agent to plan, design, build, or debug…"
-          }
+          large
+          showHeader
+          disabled={disabled}
+          onSend={onSend}
+          onStop={onStop}
+          placeholder="How can I help you today?"
         />
-      </main>
-      <SandboxPanel conversationId={conversationId} refreshKey={sandboxRefresh} />
-    </div>
-  );
-}
 
-function EmptyState() {
-  const examples = [
-    "Build a tiny Express + SQLite todo API and run the tests.",
-    "Set up a Vite + React counter app with TypeScript and verify it builds.",
-    "Initialize a git repo here, scaffold a Python CLI, and run --help.",
-    "Write a script that fetches HN top stories and saves them to data.json.",
-  ];
-  const tools: Array<[string, string]> = [
-    ["read_file", "read any file in the sandbox"],
-    ["write_file", "create or overwrite files"],
-    ["apply_patch", "targeted in-place edits"],
-    ["list_dir", "list a directory"],
-    ["tree", "recursive project map"],
-    ["search_text", "ripgrep across files"],
-    ["glob", "find files by pattern"],
-    ["delete_path", "remove files / dirs"],
-    ["move_path", "rename or move"],
-    ["run_shell", "bash commands (60s, full freedom)"],
-    ["web_fetch", "GET a URL (text/json/html→text)"],
-    ["download_url", "save remote file into sandbox"],
-    ["todo_read / todo_write", "plan and track multi-step work"],
-    ["dispatch_subagent", "fan out parallel specialists"],
-    ["finish", "wrap up with a summary"],
-  ];
-  return (
-    <div className="mx-auto mt-10 max-w-2xl text-center">
-      <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-primary-border bg-primary text-primary-foreground shadow-md">
-        <Sparkles className="h-6 w-6" />
-      </div>
-      <h2 className="text-2xl font-semibold tracking-tight">What should we build?</h2>
-      <p className="mt-2 text-sm text-muted-foreground">
-        Linux sandbox, real file editing, ripgrep, shell, web fetch, and parallel subagents — all
-        scoped to this conversation. Iterates until it works.
-      </p>
-      <div className="mt-8 grid gap-2 sm:grid-cols-2">
-        {examples.map((ex) => (
-          <ExampleCard key={ex} text={ex} />
-        ))}
-      </div>
-      <div className="mt-10 text-left">
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Tools the agent has
-        </div>
-        <ul className="grid gap-1 rounded-xl border border-border bg-card/40 p-3 text-[12px] sm:grid-cols-2">
-          {tools.map(([name, desc]) => (
-            <li key={name} className="flex items-baseline gap-2 truncate">
-              <span className="font-mono text-accent">{name}</span>
-              <span className="truncate text-muted-foreground">{desc}</span>
-            </li>
+        {/* Quick action chips, like Claude.com's Write / Learn / Code row */}
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          {[
+            { icon: Pencil, label: "Write", prompt: "Write a CLAUDE.MD file describing this project" },
+            { icon: GraduationCap, label: "Learn", prompt: "Explain how this codebase is organized" },
+            { icon: Code2, label: "Code", prompt: "Find a small todo in the codebase and do it" },
+            { icon: Bug, label: "Debug", prompt: "Run the project, surface any errors and fix them" },
+            { icon: TestTube, label: "Test", prompt: "Recommend areas to improve our tests" },
+            { icon: Wand2, label: "Refactor", prompt: "Suggest one focused refactor that improves clarity" },
+            { icon: Coffee, label: "Life stuff", prompt: "Take a break — write me a haiku about debugging" },
+          ].map((chip) => (
+            <button
+              key={chip.label}
+              onClick={() => onExample(chip.prompt)}
+              disabled={disabled}
+              className="hover-elevate active-elevate-2 inline-flex items-center gap-1.5 rounded-full border border-border bg-card/60 px-3 py-1.5 text-[12.5px] text-foreground/85 backdrop-blur transition disabled:opacity-50"
+            >
+              <chip.icon className="h-3.5 w-3.5 text-primary/80" strokeWidth={2.1} />
+              <span>{chip.label}</span>
+            </button>
           ))}
-        </ul>
-      </div>
-    </div>
-  );
-}
+        </div>
 
-function ExampleCard({ text }: { text: string }) {
-  return (
-    <div className="hover-elevate cursor-default rounded-xl border border-border bg-card px-4 py-3 text-left text-sm text-card-foreground shadow-sm">
-      {text}
+        <div className="mt-6 grid gap-2.5 sm:grid-cols-3">
+          {examples.map((ex) => {
+            const full = `${ex.before}${ex.pill}${ex.after}`;
+            return (
+              <button
+                key={full}
+                onClick={() => onExample(full)}
+                disabled={disabled}
+                className="hover-elevate active-elevate-2 group rounded-2xl border border-border bg-gradient-to-br from-card/80 to-card/40 px-4 py-3.5 text-left text-[13px] text-card-foreground shadow-sm backdrop-blur transition disabled:opacity-50"
+              >
+                <span className="text-foreground/80">{ex.before}</span>
+                <span className="mx-0.5 rounded-md bg-accent/15 px-1.5 py-0.5 font-mono text-[11px] text-accent ring-1 ring-accent/20">
+                  {ex.pill}
+                </span>
+                <span className="text-foreground/80">{ex.after}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {recents.length > 0 ? (
+          <div className="mt-12">
+            <div className="mb-3 flex items-center gap-2 text-[12px] font-medium text-muted-foreground">
+              <MessageSquare className="h-3.5 w-3.5" />
+              Your recent chats
+            </div>
+            <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+              {recents.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => navigate(`/c/${c.id}`)}
+                  className="hover-elevate active-elevate-2 group rounded-2xl border border-border bg-gradient-to-br from-card/70 to-card/40 p-4 text-left shadow-sm backdrop-blur transition"
+                >
+                  <div className="mb-1.5 flex items-center gap-1.5 text-muted-foreground">
+                    <MessageSquare className="h-3.5 w-3.5" />
+                  </div>
+                  <div className="line-clamp-2 text-[13px] font-medium text-card-foreground">
+                    {c.title || "Untitled"}
+                  </div>
+                  <div className="mt-2 text-[11px] text-muted-foreground">
+                    {relativeTime(c.updatedAt ?? c.createdAt)}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

@@ -13,14 +13,25 @@ const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
 };
 
 const LABELS: Record<string, (input: Record<string, unknown>) => string> = {
-  read_file: (i) => `read ${String(i.path ?? "")}`,
-  write_file: (i) => `write ${String(i.path ?? "")}`,
-  apply_patch: (i) => `patch ${String(i.path ?? "")}`,
-  list_dir: (i) => `ls ${String(i.path ?? ".")}`,
-  tree: (i) => `tree ${String(i.path ?? ".")}`,
-  search_text: (i) => `grep "${String(i.query ?? "")}"`,
-  run_shell: (i) => `$ ${String(i.command ?? "")}`,
-  dispatch_subagent: (i) => `→ ${String(i.role ?? "subagent")}`,
+  read_file: (i) => String(i.path ?? ""),
+  write_file: (i) => String(i.path ?? ""),
+  apply_patch: (i) => String(i.path ?? ""),
+  list_dir: (i) => String(i.path ?? "."),
+  tree: (i) => String(i.path ?? "."),
+  search_text: (i) => `"${String(i.query ?? "")}"`,
+  run_shell: (i) => String(i.command ?? ""),
+  dispatch_subagent: (i) => String(i.role ?? "subagent"),
+};
+
+const TOOL_VERBS: Record<string, string> = {
+  read_file: "Read",
+  write_file: "Wrote",
+  apply_patch: "Patched",
+  list_dir: "Listed",
+  tree: "Explored",
+  search_text: "Searched",
+  run_shell: "Ran command",
+  dispatch_subagent: "Dispatched",
 };
 
 export type ToolCardProps = {
@@ -48,31 +59,36 @@ export function ToolCard({ tool, input, output, status, scope, subagentRole }: T
   const isShell = tool === "run_shell";
   const isWrite = tool === "write_file" || tool === "apply_patch";
 
+  // Inline tool-call style: "Ran a command, used Yushe integration ›" — looks like a hyperlink, expands on click
+  const verb = TOOL_VERBS[tool] ?? "Used tool";
   return (
-    <div className="group rounded-lg border border-border bg-card/60 text-card-foreground shadow-sm">
+    <div className="group">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-card/80"
+        className="inline-flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[13px] text-muted-foreground hover:text-accent transition"
       >
-        <ChevronRight
-          className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`}
-        />
-        <Icon className="h-3.5 w-3.5 text-accent" />
+        <Icon className="h-3.5 w-3.5 shrink-0 text-accent/70" />
         {scope === "subagent" && subagentRole && (
           <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">
             {subagentRole}
           </span>
         )}
-        <span className="flex-1 truncate font-mono text-[12px]">{label}</span>
+        <span className="truncate">
+          <span className="text-accent/80">{verb}</span>
+          <span className="ml-1 font-mono text-[12px] text-muted-foreground/90">{label}</span>
+        </span>
         <StatusIcon
-          className={`h-3.5 w-3.5 ${statusColor} ${status === "running" ? "animate-spin" : ""}`}
+          className={`h-3 w-3 shrink-0 ${statusColor} ${status === "running" ? "animate-spin" : ""}`}
+        />
+        <ChevronRight
+          className={`h-3 w-3 shrink-0 text-muted-foreground/60 transition-transform ${open ? "rotate-90" : ""}`}
         />
       </button>
       {open && (
-        <div className="space-y-2 border-t border-border/60 px-3 py-2">
+        <div className="pop-in mt-1.5 ml-5 space-y-2 rounded-xl border border-border/70 bg-gradient-to-br from-card/60 to-card/30 px-3 py-2 backdrop-blur">
           {input && tool !== "run_shell" && (
-            <pre className="overflow-x-auto rounded bg-secondary/50 p-2 text-[11px] leading-snug text-secondary-foreground">
+            <pre className="slim-scroll overflow-x-auto rounded bg-secondary/50 p-2 text-[11px] leading-snug text-secondary-foreground">
               {JSON.stringify(input, null, 2)}
             </pre>
           )}
@@ -87,7 +103,7 @@ export function ToolCard({ tool, input, output, status, scope, subagentRole }: T
                   <div className="rounded bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-300">
                     {head}
                   </div>
-                  <pre className="max-h-80 overflow-auto rounded bg-black/60 p-2 font-mono text-[11px] leading-snug">
+                  <pre className="slim-scroll max-h-80 overflow-auto rounded bg-black/60 p-2 font-mono text-[11px] leading-snug">
                     {diff.split("\n").map((line, i) => {
                       const cls = line.startsWith("+ ")
                         ? "text-emerald-300"
@@ -106,7 +122,7 @@ export function ToolCard({ tool, input, output, status, scope, subagentRole }: T
             }
             return (
               <pre
-                className={`max-h-80 overflow-auto rounded p-2 text-[11px] leading-snug ${
+                className={`slim-scroll max-h-80 overflow-auto rounded p-2 text-[11px] leading-snug ${
                   status === "error"
                     ? "bg-destructive/10 text-destructive"
                     : isShell

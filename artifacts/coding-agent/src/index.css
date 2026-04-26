@@ -212,9 +212,105 @@
   }
   .nice-scroll::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)/.3); background-clip: padding-box; }
 
+  /* Ultra-thin, almost invisible scrollbar — only appears on hover */
+  .slim-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 200ms ease;
+  }
+  .slim-scroll:hover { scrollbar-color: hsl(var(--muted-foreground)/.35) transparent; }
+  .slim-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+  .slim-scroll::-webkit-scrollbar-track { background: transparent; }
+  .slim-scroll::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 999px;
+    transition: background 200ms ease;
+  }
+  .slim-scroll:hover::-webkit-scrollbar-thumb { background: hsl(var(--muted-foreground)/.35); }
+  .slim-scroll::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)/.55); }
+  .slim-scroll::-webkit-scrollbar-corner { background: transparent; }
+
+  /* Smooth fade-in for new content */
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .fade-in-up { animation: fadeInUp 280ms cubic-bezier(0.16, 1, 0.3, 1); }
+
+  /* Soft popover open animation */
+  @keyframes popIn {
+    from { opacity: 0; transform: scale(0.96) translateY(-2px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+  .pop-in { animation: popIn 140ms cubic-bezier(0.16, 1, 0.3, 1); transform-origin: top; }
+
+  /* Strip Prism oneDark per-line backgrounds — they look like selection-rectangles inside our chat */
+  .markdown pre,
+  .markdown pre > div,
+  .markdown pre code,
+  .markdown pre code[class*="language-"],
+  .markdown pre[class*="language-"] {
+    background: transparent !important;
+    text-shadow: none !important;
+  }
+  .markdown pre code .token,
+  .markdown pre code span {
+    background: transparent !important;
+  }
+  .markdown pre code ::selection,
+  .markdown pre code::selection {
+    background: hsl(var(--primary) / 0.25) !important;
+  }
+
+  /* Shimmering silver text used for "Thinking…" / "Working…" placeholders */
+  @keyframes shimmerSlide {
+    0% { background-position: -180% 0; }
+    100% { background-position: 280% 0; }
+  }
+  .shimmer-text {
+    background-image: linear-gradient(
+      90deg,
+      hsl(var(--muted-foreground) / 0.55) 0%,
+      hsl(var(--muted-foreground) / 0.55) 35%,
+      hsl(var(--foreground) / 0.95) 50%,
+      hsl(var(--muted-foreground) / 0.55) 65%,
+      hsl(var(--muted-foreground) / 0.55) 100%
+    );
+    background-size: 200% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    animation: shimmerSlide 2.4s linear infinite;
+    font-style: italic;
+    letter-spacing: 0.01em;
+  }
+
   @keyframes pulseGlow {
     0%, 100% { opacity: .6; }
     50% { opacity: 1; }
   }
   .pulse-glow { animation: pulseGlow 1.6s ease-in-out infinite; }
+
+  /* Claude Code desktop dotted backdrop */
+  .dotted-bg {
+    background-image:
+      radial-gradient(circle, hsl(var(--foreground) / 0.06) 1px, transparent 1.2px);
+    background-size: 14px 14px;
+    background-position: 0 0;
+  }
+
+  /* Claude Code mascot pixel art */
+  .claude-mascot {
+    width: 56px;
+    height: 56px;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+
+  @keyframes mascotBlink {
+    0%, 92%, 100% { transform: scaleY(1); }
+    94%, 98% { transform: scaleY(0.1); }
+  }
+  .mascot-blink { animation: mascotBlink 4s ease-in-out infinite; transform-origin: center; }
 }
