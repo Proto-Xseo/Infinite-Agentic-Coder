@@ -10,8 +10,8 @@ const router: IRouter = Router();
 
 const ORCHESTRATOR_MODEL = "claude-sonnet-4-6";
 const SUBAGENT_MODEL = "claude-sonnet-4-6";
-const MAX_TURNS = 25;
-const MAX_SUBAGENT_TURNS = 12;
+const MAX_TURNS = 40;
+const MAX_SUBAGENT_TURNS = 20;
 
 const SANDBOX_BASE = path.resolve(
   process.cwd(),
@@ -24,23 +24,49 @@ function sandboxRootFor(convId: number): string {
 
 const ORCHESTRATOR_SYSTEM = `You are a senior coding agent operating inside a Linux sandbox dedicated to this conversation. The sandbox is your working directory — every read_file, write_file, list_dir, run_shell, etc. is scoped to it.
 
-Working style:
-- Always start by exploring with \`tree\` or \`list_dir\` if the project is not empty.
-- Plan briefly, then act. Prefer many small, focused tool calls over one giant one. Iterate.
-- Use \`run_shell\` freely for installs (npm, pip, pnpm), tests, builds, git, anything else inside the sandbox. The sandbox is yours; experiment.
-- For larger or independent chunks of work, call \`dispatch_subagent\` with a focused role and a self-contained task. Subagents have the same toolset.
-- When code is written, verify it: build, test, or at minimum read it back. Iterate on failures.
-- When the user's request is fully done, call \`finish\` with a short summary. Do not call \`finish\` until the work is real and verified.
+## Core working loop
+1. Explore first: call \`tree\` or \`list_dir\` to understand the project.
+2. Plan in one sentence, then act immediately. Do NOT ask for permission.
+3. Issue MULTIPLE tool calls in a single response whenever they are independent. The system executes them all in parallel. For example, if you need to write 5 files, call write_file 5 times in the same response.
+4. After tools complete, check results and issue the next batch of tool calls. Keep going until the work is genuinely done.
+5. When code is written, verify it with \`run_shell\` (build, test, lint). Fix failures immediately.
+6. Only call \`finish\` when everything is done and verified. Never stop early.
 
-Output style:
-- Keep narrative messages concise. Tools do the work; words explain intent.
-- DO NOT dump full file contents into your assistant text. Files belong in tool calls (write_file, apply_patch, read_file) which the UI renders as expandable cards.
-- Inline code blocks in your messages must be SHORT illustrative snippets only (typically <20 lines). For anything bigger, use the file tools and reference the path.
-- When showing snippets inline, use fenced code blocks with a language tag.
-- Never fabricate — if a command failed, say so and try a different approach.`;
+## Parallelism rules (critical)
+- Batch ALL independent tool calls in one response — they run in parallel on the server.
+- Example: to write a project, write ALL files in one response (10–20 write_file calls at once).
+- Only serialize tool calls if call B depends on the output of call A.
+- Never do one tool call per response when you could do ten.
+
+## write_file rules (critical)
+- ALWAYS include the FULL file content in the \`content\` field. Never write partial files.
+- If a file is long, write the ENTIRE thing in one call. Never truncate.
+- Never call write_file with an empty or placeholder content — the system will reject it.
+- Files belong in tool calls, not in your text messages.
+
+## dispatch_subagent
+- Use for large independent chunks (write the frontend, write the backend, write the tests).
+- Multiple subagent dispatches in one response run in parallel.
+- Subagents have the full toolset (read/write/shell) and loop until they call finish.
+
+## Output style
+- Keep narrative text concise — tools do the work, words explain intent.
+- Do NOT dump full file contents into assistant text. Use write_file instead.
+- Inline snippets ≤20 lines only; bigger content goes in tool calls.
+- Never fabricate tool results. If a command failed, say so and fix it.`;
 
 const SUBAGENT_SYSTEM = (role: string) =>
-  `You are a focused subagent acting as: ${role}. You work inside the same sandbox as the orchestrator and have the full agent toolset (read_file, write_file, apply_patch, list_dir, tree, search_text, run_shell). Do exactly the task you were given, verify your work with shell or file reads when relevant, and call \`finish\` with a short result summary when done. Do NOT call dispatch_subagent — only the orchestrator dispatches.`;
+  `You are a focused subagent acting as: ${role}. You work inside the same sandbox as the orchestrator.
+
+Your working loop:
+1. Explore with tree/list_dir if needed, then act immediately.
+2. Issue MULTIPLE tool calls per response whenever they are independent — the system runs them in parallel.
+3. Always write the FULL file content in write_file — never truncate.
+4. Verify your work (run_shell build/test) and fix failures.
+5. Keep looping until the task is fully complete.
+6. Call finish with a summary when done. Do NOT stop early.
+
+Do NOT call dispatch_subagent. You have: read_file, write_file, apply_patch, list_dir, tree, search_text, run_shell, glob, delete_path, move_path, web_fetch, download_url, todo_write, todo_read.`;
 
 type SseEvent = Record<string, unknown>;
 
@@ -80,7 +106,7 @@ async function runSubagent(
   for (let turn = 0; turn < MAX_SUBAGENT_TURNS; turn++) {
     const result = await anthropic.messages.create({
       model: SUBAGENT_MODEL,
-      max_tokens: 8192,
+      max_tokens: 16384,
       system: SUBAGENT_SYSTEM(role),
       tools: SUBAGENT_TOOLS,
       messages: subMessages as never,
@@ -163,6 +189,7 @@ async function runSubagent(
         subagentCallId: callId,
         tool: call.name,
         id: call.id,
+        input: call.input,
         output: out,
         isError,
       });
@@ -214,8 +241,15 @@ router.post("/conversations/:id/messages", async (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
 
-  const ctx = { sandboxRoot: sandboxRootFor(id) };
-  await ensureSandbox(ctx);
+  const folder = parsed.data.folder ?? "sandbox";
+  // cwd is artifacts/api-server; workspace root is 2 levels up
+  const PROJECT_ROOT = path.resolve(
+    process.env.PROJECT_ROOT || path.resolve(process.cwd(), "../.."),
+  );
+  const resolvedRoot =
+    folder === "project" ? PROJECT_ROOT : sandboxRootFor(id);
+  const ctx = { sandboxRoot: resolvedRoot };
+  if (folder !== "project") await ensureSandbox(ctx);
 
   const history = await db
     .select()
@@ -223,24 +257,33 @@ router.post("/conversations/:id/messages", async (req, res) => {
     .where(eq(messages.conversationId, id))
     .orderBy(asc(messages.id));
 
+  // Reconstruct only user + assistant TEXT messages for history.
+  // Tool call/result pairs live within a single turn and don't need to be
+  // replayed — the model already acted on them. Including them incorrectly
+  // breaks the user/assistant alternation required by the Anthropic API.
   const apiMessages: ApiMsg[] = [];
   for (const m of history) {
     if (m.role === "user") {
       apiMessages.push({ role: "user", content: m.content });
     } else if (m.role === "assistant") {
-      apiMessages.push({ role: "assistant", content: m.content });
-    } else if (m.role === "subagent") {
-      apiMessages.push({
-        role: "assistant",
-        content: `[subagent result captured earlier]\n${m.content}`,
-      });
-    } else if (m.role === "tool") {
-      apiMessages.push({
-        role: "assistant",
-        content: `[tool call captured earlier]\n${m.content}`,
-      });
+      // Merge consecutive assistant messages into one to avoid API errors
+      if (
+        apiMessages.length > 0 &&
+        apiMessages[apiMessages.length - 1].role === "assistant"
+      ) {
+        const last = apiMessages[apiMessages.length - 1];
+        last.content = `${last.content}\n${m.content}`;
+      } else {
+        apiMessages.push({ role: "assistant", content: m.content });
+      }
     }
+    // Intentionally skip role:"tool" and role:"subagent" — they were
+    // within-turn interactions already consumed by the model.
   }
+
+  // Ensure alternating user/assistant (API requirement)
+  // If last message is assistant, add a placeholder user message so we can append the new one.
+  // (The new user message was already inserted above as the last DB row, so it should be last.)
 
   try {
     let assistantTextSoFar = "";
@@ -249,20 +292,32 @@ router.post("/conversations/:id/messages", async (req, res) => {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       const stream = anthropic.messages.stream({
         model: ORCHESTRATOR_MODEL,
-        max_tokens: 8192,
-        system: ORCHESTRATOR_SYSTEM,
+        max_tokens: 16384,
+        system:
+          folder === "project"
+            ? ORCHESTRATOR_SYSTEM +
+              `\n\n## IMPORTANT: Working on the REAL project\nYou are operating directly on the user's actual Replit project at: ${PROJECT_ROOT}\nThis is NOT an isolated sandbox — changes are real and permanent. Be careful with deletions. The user chose "Project root" mode intentionally.`
+            : ORCHESTRATOR_SYSTEM,
         tools: AGENT_TOOLS,
         messages: apiMessages as never,
       });
 
       let turnText = "";
 
+      // Maps streaming block index → { id, name } for tool_use blocks
+      const blockMeta: Record<number, { id: string; name: string }> = {};
+      // Accumulate partial JSON per block index for tool inputs
+      const partialInputs: Record<number, string> = {};
+
       for await (const rawEvent of stream as AsyncIterable<unknown>) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const event = rawEvent as any;
+
         if (event.type === "content_block_start") {
           const block = event.content_block;
           if (block.type === "tool_use") {
+            blockMeta[event.index] = { id: block.id, name: block.name };
+            partialInputs[event.index] = "";
             send(res, {
               type: "tool_call_start",
               tool: block.name,
@@ -275,12 +330,24 @@ router.post("/conversations/:id/messages", async (req, res) => {
             turnText += event.delta.text;
             assistantTextSoFar += event.delta.text;
             send(res, { type: "assistant_text", text: event.delta.text });
+          } else if (event.delta.type === "input_json_delta") {
+            // Stream partial tool input — lets frontend show live write progress
+            const meta = blockMeta[event.index];
+            if (meta) {
+              partialInputs[event.index] = (partialInputs[event.index] ?? "") + event.delta.partial_json;
+              send(res, {
+                type: "tool_input_delta",
+                id: meta.id,
+                tool: meta.name,
+                partial_json: event.delta.partial_json,
+                accumulated_json: partialInputs[event.index],
+              });
+            }
           }
         }
       }
 
       const finalMessage = await stream.finalMessage();
-      // Use the SDK's canonical tool_use blocks so input parsing matches what we send back.
       const toolUses: Array<{
         id: string;
         name: string;
@@ -330,61 +397,63 @@ router.post("/conversations/:id/messages", async (req, res) => {
         is_error?: boolean;
       }> = [];
 
-      // Split: finish/regular tools run sequentially (they share the sandbox);
-      // subagent dispatches run in parallel since each subagent has its own conversation.
+      // Separate finish / regular / subagent calls
+      const finishCalls = toolUses.filter((c) => c.name === "finish");
+      const regularCalls = toolUses.filter(
+        (c) => c.name !== "finish" && c.name !== "dispatch_subagent",
+      );
       const subagentCalls = toolUses.filter((c) => c.name === "dispatch_subagent");
-      const otherCalls = toolUses.filter((c) => c.name !== "dispatch_subagent");
 
-      for (const call of otherCalls) {
-        if (call.name === "finish") {
-          const summary = String(call.input.summary ?? "(no summary)");
-          send(res, { type: "finish", summary });
-          await db.insert(messages).values({
-            conversationId: id,
-            role: "assistant",
-            content: summary,
+      // Handle finish
+      for (const call of finishCalls) {
+        const summary = String(call.input.summary ?? "(no summary)");
+        send(res, { type: "finish", summary });
+        await db.insert(messages).values({
+          conversationId: id,
+          role: "assistant",
+          content: summary,
+        });
+        toolResults.push({ type: "tool_result", tool_use_id: call.id, content: "ok" });
+        didFinish = true;
+      }
+
+      // Run ALL regular tool calls in parallel — no sequential blocking
+      const regularResults = await Promise.all(
+        regularCalls.map(async (call) => {
+          send(res, {
+            type: "tool_call",
+            scope: "orchestrator",
+            tool: call.name,
+            id: call.id,
+            input: call.input,
           });
-          toolResults.push({
+          let out: string;
+          let isError = false;
+          try {
+            out = await executeTool(ctx, call.name, call.input);
+          } catch (err) {
+            out = err instanceof Error ? err.message : String(err);
+            isError = true;
+          }
+          send(res, {
             type: "tool_result",
-            tool_use_id: call.id,
-            content: "ok",
+            scope: "orchestrator",
+            tool: call.name,
+            id: call.id,
+            input: call.input,
+            output: out,
+            isError,
           });
-          didFinish = true;
-          continue;
-        }
+          return { call, out, isError };
+        }),
+      );
 
-        send(res, {
-          type: "tool_call",
-          scope: "orchestrator",
-          tool: call.name,
-          id: call.id,
-          input: call.input,
-        });
-
-        let out: string;
-        let isError = false;
-        try {
-          out = await executeTool(ctx, call.name, call.input);
-        } catch (err) {
-          out = err instanceof Error ? err.message : String(err);
-          isError = true;
-        }
-
-        send(res, {
-          type: "tool_result",
-          scope: "orchestrator",
-          tool: call.name,
-          id: call.id,
-          output: out,
-          isError,
-        });
-
+      for (const { call, out, isError } of regularResults) {
         await db.insert(messages).values({
           conversationId: id,
           role: "tool",
           content: `[${call.name}] ${JSON.stringify(call.input)}\n---\n${out}`,
         });
-
         toolResults.push({
           type: "tool_result",
           tool_use_id: call.id,
@@ -393,6 +462,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
         });
       }
 
+      // Run subagent calls in parallel
       if (subagentCalls.length > 0) {
         const settled = await Promise.all(
           subagentCalls.map(async (call) => {
@@ -434,7 +504,9 @@ router.post("/conversations/:id/messages", async (req, res) => {
         }
       }
 
-      apiMessages.push({ role: "user", content: toolResults });
+      if (toolResults.length > 0) {
+        apiMessages.push({ role: "user", content: toolResults });
+      }
 
       if (didFinish) break;
     }

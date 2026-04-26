@@ -288,7 +288,20 @@ async function toolReadFile(ctx: ToolContext, input: Record<string, unknown>): P
 
 async function toolWriteFile(ctx: ToolContext, input: Record<string, unknown>): Promise<string> {
   const rel = String(input.path ?? "");
-  const content = String(input.content ?? "");
+  if (!rel) throw new Error("write_file: 'path' is required");
+  if (input.content === undefined || input.content === null) {
+    throw new Error(
+      "write_file: 'content' field is required — include the FULL file content. Never call write_file without content.",
+    );
+  }
+  const content = String(input.content);
+  const trimmed = content.trim();
+  if (trimmed.length === 0) {
+    throw new Error(
+      `write_file: content for '${rel}' is empty. Include the complete source code. ` +
+        "Did you forget to populate the content field?",
+    );
+  }
   const p = safePath(ctx, rel);
   await fs.mkdir(path.dirname(p), { recursive: true });
   await fs.writeFile(p, content, "utf8");

@@ -90,4 +90,5 @@ export const SendAnthropicMessageParams = zod.object({
 
 export const SendAnthropicMessageBody = zod.object({
   content: zod.string(),
+  folder: zod.enum(["sandbox", "project"]).optional().default("sandbox"),
 });

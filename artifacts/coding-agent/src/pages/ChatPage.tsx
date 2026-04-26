@@ -11,7 +11,7 @@ import {
 import { ConversationSidebar } from "../components/ConversationSidebar";
 import { MessageBubble, type Role } from "../components/MessageBubble";
 import { ToolCard } from "../components/ToolCard";
-import { ChatInput } from "../components/ChatInput";
+import { ChatInput, type ChatSettings } from "../components/ChatInput";
 import { SandboxPanel } from "../components/SandboxPanel";
 import { apiUrl } from "../lib/api-base";
 import { useListAnthropicConversations } from "@workspace/api-client-react";
@@ -37,8 +37,9 @@ type StreamItem =
       id: string;
       tool: string;
       input?: Record<string, unknown>;
+      partialInput?: string;
       output?: string;
-      status: "running" | "done" | "error";
+      status: "streaming-input" | "running" | "done" | "error";
       scope?: "orchestrator" | "subagent";
       subagentRole?: string;
     };
@@ -81,6 +82,8 @@ export default function ChatPage() {
   const [sandboxRefresh, setSandboxRefresh] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Track the conv ID we are actively streaming into (survives navigate)
+  const activeConvIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     setLiveItems([]);
@@ -143,18 +146,25 @@ export default function ChatPage() {
   const allItems = useMemo(() => [...persistedItems, ...liveItems], [persistedItems, liveItems]);
   const isEmpty = allItems.length === 0;
 
-  const handleSend = async (text: string) => {
+  const handleSend = async (text: string, chatSettings?: ChatSettings) => {
     let activeId = conversationId;
     if (!activeId) {
       try {
         const created = await createAnthropicConversation({ title: text.slice(0, 60) });
         activeId = created.id;
+        activeConvIdRef.current = activeId;
         qc.invalidateQueries({ queryKey: getListAnthropicConversationsQueryKey() });
-        navigate(`/c/${activeId}`);
+
+        // Update URL without unmounting this component (replaceState doesn't fire popstate)
+        // so wouter doesn't re-render and we don't lose streaming state.
+        const base = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+        window.history.replaceState({}, "", `${base}/c/${activeId}`);
       } catch {
         toast.error("Could not start a new chat");
         return;
       }
+    } else {
+      activeConvIdRef.current = activeId;
     }
 
     setStreaming(true);
@@ -163,7 +173,35 @@ export default function ChatPage() {
       { kind: "message", role: "assistant", text: "" },
     ]);
 
+    // Buffer for batching text updates via requestAnimationFrame
     let assistantBuf = "";
+    let pendingChunk = "";
+    let rafId = 0;
+
+    function flushText() {
+      rafId = 0;
+      if (!pendingChunk) return;
+      const chunk = pendingChunk;
+      pendingChunk = "";
+      const snapshot = assistantBuf;
+      setLiveItems((prev) => {
+        const next = [...prev];
+        // Find and update the last assistant bubble
+        for (let i = next.length - 1; i >= 0; i--) {
+          const it = next[i];
+          if (it.kind === "message" && it.role === "assistant") {
+            next[i] = { ...it, text: snapshot };
+            return next;
+          }
+          if (it.kind !== "message") break;
+        }
+        // No assistant bubble found — create one
+        void chunk;
+        next.push({ kind: "message", role: "assistant", text: snapshot });
+        return next;
+      });
+    }
+
     let aborted = false;
     const controller = new AbortController();
     abortRef.current = controller;
@@ -172,7 +210,7 @@ export default function ChatPage() {
       const res = await fetch(apiUrl(`/anthropic/conversations/${activeId}/messages`), {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-        body: JSON.stringify({ content: text }),
+        body: JSON.stringify({ content: text, folder: chatSettings?.folder ?? "sandbox" }),
         signal: controller.signal,
       });
       if (!res.ok || !res.body) {
@@ -210,42 +248,42 @@ export default function ChatPage() {
         toast.error("Stream interrupted");
       }
     } finally {
+      // Flush any remaining buffered text
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = 0;
+        flushText();
+      }
       setStreaming(false);
       abortRef.current = null;
-      if (activeId) {
-        await qc.invalidateQueries({
-          queryKey: getGetAnthropicConversationQueryKey(activeId),
-        });
+      const finalId = activeConvIdRef.current ?? activeId;
+      if (finalId) {
+        await qc.invalidateQueries({ queryKey: getGetAnthropicConversationQueryKey(finalId) });
         await qc.invalidateQueries({ queryKey: getListAnthropicConversationsQueryKey() });
+        // Now sync wouter's router state (URL already matches so this is a no-op visually)
+        navigate(`/c/${finalId}`);
       }
       setLiveItems([]);
     }
 
     function startNewAssistantBubble() {
       assistantBuf = "";
+      pendingChunk = "";
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
       setLiveItems((prev) => [...prev, { kind: "message", role: "assistant", text: "" }]);
     }
 
     function handleEvent(evt: Record<string, unknown>) {
       const type = evt.type as string;
+
       if (type === "assistant_text") {
+        // Batch text updates via RAF for smooth streaming
         assistantBuf += String(evt.text ?? "");
-        setLiveItems((prev) => {
-          const next = [...prev];
-          for (let i = next.length - 1; i >= 0; i--) {
-            const it = next[i];
-            if (it.kind === "message" && it.role === "assistant") {
-              next[i] = { ...it, text: assistantBuf };
-              return next;
-            }
-            if (it.kind !== "message") break;
-          }
-          next.push({ kind: "message", role: "assistant", text: assistantBuf });
-          return next;
-        });
+        pendingChunk += String(evt.text ?? "");
+        if (!rafId) rafId = requestAnimationFrame(flushText);
+
       } else if (type === "tool_call_start") {
-        // ignore — we wait for tool_call which has full input
-      } else if (type === "tool_call") {
+        // Tool input is about to stream — add card immediately in streaming-input state
         const id = String(evt.id ?? Math.random());
         setLiveItems((prev) => [
           ...prev,
@@ -253,12 +291,59 @@ export default function ChatPage() {
             kind: "tool",
             id,
             tool: String(evt.tool ?? "tool"),
-            input: (evt.input as Record<string, unknown>) ?? {},
-            status: "running",
+            partialInput: "",
+            status: "streaming-input" as const,
             scope: (evt.scope as "orchestrator" | "subagent") ?? "orchestrator",
-            subagentRole: evt.subagentRole as string | undefined,
           },
         ]);
+
+      } else if (type === "tool_input_delta") {
+        // Accumulate partial JSON for the live write display
+        const id = String(evt.id ?? "");
+        const accumulated = String(evt.accumulated_json ?? "");
+        setLiveItems((prev) =>
+          prev.map((it) =>
+            it.kind === "tool" && it.id === id
+              ? { ...it, partialInput: accumulated }
+              : it,
+          ),
+        );
+
+      } else if (type === "tool_call") {
+        // Full input arrived — upgrade card from streaming-input → running
+        const id = String(evt.id ?? Math.random());
+        setLiveItems((prev) => {
+          // If card exists from tool_call_start, update it
+          const exists = prev.some((it) => it.kind === "tool" && it.id === id);
+          if (exists) {
+            return prev.map((it) =>
+              it.kind === "tool" && it.id === id
+                ? {
+                    ...it,
+                    input: (evt.input as Record<string, unknown>) ?? {},
+                    partialInput: undefined,
+                    status: "running" as const,
+                    scope: (evt.scope as "orchestrator" | "subagent") ?? "orchestrator",
+                    subagentRole: evt.subagentRole as string | undefined,
+                  }
+                : it,
+            );
+          }
+          // Fallback: add new card
+          return [
+            ...prev,
+            {
+              kind: "tool" as const,
+              id,
+              tool: String(evt.tool ?? "tool"),
+              input: (evt.input as Record<string, unknown>) ?? {},
+              status: "running" as const,
+              scope: (evt.scope as "orchestrator" | "subagent") ?? "orchestrator",
+              subagentRole: evt.subagentRole as string | undefined,
+            },
+          ];
+        });
+
       } else if (type === "tool_result") {
         const id = String(evt.id ?? "");
         setLiveItems((prev) =>
@@ -266,8 +351,9 @@ export default function ChatPage() {
             it.kind === "tool" && it.id === id
               ? {
                   ...it,
+                  input: it.input ?? (evt.input as Record<string, unknown> | undefined),
                   output: String(evt.output ?? ""),
-                  status: evt.isError ? "error" : "done",
+                  status: evt.isError ? ("error" as const) : ("done" as const),
                 }
               : it,
           ),
@@ -286,33 +372,33 @@ export default function ChatPage() {
         }
         // Auto-focus the right Content panel on the file the agent just touched
         if (t === "write_file" || t === "apply_patch" || t === "read_file") {
-          const findInput = (() => {
-            const cur = (evt.input as Record<string, unknown> | undefined) ?? {};
-            return (cur.path as string) ?? (cur.file as string) ?? "";
-          })();
-          if (findInput) setFocusFile(findInput);
+          const toolInput = (evt.input as Record<string, unknown> | undefined) ?? {};
+          const filePath = (toolInput.path as string) ?? (toolInput.file as string) ?? "";
+          if (filePath) setFocusFile(filePath);
         }
         startNewAssistantBubble();
+
       } else if (type === "subagent_start") {
         const id = String(evt.id ?? Math.random());
         setLiveItems((prev) => [
           ...prev,
           {
-            kind: "tool",
+            kind: "tool" as const,
             id,
             tool: "dispatch_subagent",
             input: { role: String(evt.role ?? ""), task: String(evt.task ?? "") },
-            status: "running",
-            scope: "orchestrator",
+            status: "running" as const,
+            scope: "orchestrator" as const,
           },
           {
-            kind: "message",
-            role: "subagent",
+            kind: "message" as const,
+            role: "subagent" as Role,
             text: "",
             subagentTask: String(evt.role ?? "task"),
             subagentRole: String(evt.role ?? ""),
           },
         ]);
+
       } else if (type === "subagent_result") {
         const result = String(evt.text ?? "");
         const subId = String(evt.id ?? "");
@@ -335,6 +421,7 @@ export default function ChatPage() {
           return next;
         });
         startNewAssistantBubble();
+
       } else if (type === "finish") {
         const summary = String(evt.summary ?? "");
         if (summary) {
@@ -351,8 +438,10 @@ export default function ChatPage() {
             return next;
           });
         }
+
       } else if (type === "done") {
         // finished
+
       } else if (type === "error") {
         aborted = true;
         toast.error(String(evt.error ?? evt.message ?? "Agent error"));
@@ -365,19 +454,10 @@ export default function ChatPage() {
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
       {sidebarOpen ? (
-        <>
-          <ConversationSidebar
-            activeId={conversationId}
-            onClose={() => setSidebarOpen(false)}
-            width={sidebarWidth}
-          />
-          <ResizeHandle
-            onResize={(dx) =>
-              setSidebarWidth((w) => Math.min(480, Math.max(200, w + dx)))
-            }
-            title="Drag to resize sidebar"
-          />
-        </>
+        <ConversationSidebar
+          activeId={conversationId}
+          onArtifactsToggle={() => setContentOpen((v) => !v)}
+        />
       ) : null}
       <main className="relative flex flex-1 flex-col dotted-bg">
         {/* Window-chrome style title bar */}
@@ -405,12 +485,12 @@ export default function ChatPage() {
           ) : null}
         </header>
 
-        {isEmpty ? (
+        {isEmpty && !streaming ? (
           <EmptyHero disabled={streaming} onSend={handleSend} onExample={onExample} onStop={() => abortRef.current?.abort()} />
         ) : (
           <>
             <div ref={scrollRef} className="flex-1 overflow-y-auto nice-scroll">
-              <div className="mx-auto max-w-3xl space-y-3 px-4 py-8">
+              <div className="mx-auto max-w-3xl space-y-3 px-4 py-8 chat-content-enter">
                 {allItems.map((it, i) => {
                   if (it.kind === "tool") {
                     return (
@@ -418,6 +498,7 @@ export default function ChatPage() {
                         key={`${it.id}-${i}`}
                         tool={it.tool}
                         input={it.input}
+                        partialInput={it.partialInput}
                         output={it.output}
                         status={it.status}
                         scope={it.scope}
@@ -573,7 +654,7 @@ function EmptyHero({
   onStop,
 }: {
   disabled?: boolean;
-  onSend: (t: string) => void;
+  onSend: (t: string, settings: ChatSettings) => void;
   onExample: (t: string) => void;
   onStop?: () => void;
 }) {
@@ -593,7 +674,7 @@ function EmptyHero({
   ];
 
   return (
-    <div className="flex-1 overflow-y-auto nice-scroll">
+    <div className="flex-1 overflow-y-auto nice-scroll hero-enter">
       <div className="mx-auto w-full max-w-3xl px-6 pt-20 pb-12">
         {/* Plan badge */}
         <div className="mb-6 flex justify-center">
@@ -621,7 +702,7 @@ function EmptyHero({
           placeholder="How can I help you today?"
         />
 
-        {/* Quick action chips, like Claude.com's Write / Learn / Code row */}
+        {/* Quick action chips */}
         <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
           {[
             { icon: Pencil, label: "Write", prompt: "Write a CLAUDE.MD file describing this project" },
@@ -644,48 +725,45 @@ function EmptyHero({
           ))}
         </div>
 
-        <div className="mt-6 grid gap-2.5 sm:grid-cols-3">
-          {examples.map((ex) => {
-            const full = `${ex.before}${ex.pill}${ex.after}`;
-            return (
-              <button
-                key={full}
-                onClick={() => onExample(full)}
-                disabled={disabled}
-                className="hover-elevate active-elevate-2 group rounded-2xl border border-border bg-gradient-to-br from-card/80 to-card/40 px-4 py-3.5 text-left text-[13px] text-card-foreground shadow-sm backdrop-blur transition disabled:opacity-50"
-              >
-                <span className="text-foreground/80">{ex.before}</span>
-                <span className="mx-0.5 rounded-md bg-accent/15 px-1.5 py-0.5 font-mono text-[11px] text-accent ring-1 ring-accent/20">
+        {/* Example sentence-style chips */}
+        <div className="mt-6 space-y-2">
+          {examples.map((ex, i) => (
+            <button
+              key={i}
+              onClick={() => onExample(`${ex.before}${ex.pill}${ex.after}`)}
+              disabled={disabled}
+              className="hover-elevate group flex w-full items-center gap-3 rounded-xl border border-border/60 bg-card/40 px-4 py-3 text-left text-[13px] text-foreground/85 backdrop-blur transition hover:border-border hover:bg-card/70 disabled:opacity-50"
+            >
+              <FileIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+              <span>
+                {ex.before}
+                <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[12px] font-medium text-primary">
                   {ex.pill}
                 </span>
-                <span className="text-foreground/80">{ex.after}</span>
-              </button>
-            );
-          })}
+                {ex.after}
+              </span>
+            </button>
+          ))}
         </div>
 
         {recents.length > 0 ? (
-          <div className="mt-12">
-            <div className="mb-3 flex items-center gap-2 text-[12px] font-medium text-muted-foreground">
-              <MessageSquare className="h-3.5 w-3.5" />
-              Your recent chats
+          <div className="mt-8">
+            <div className="mb-2 flex items-center gap-1.5 text-[11.5px] font-medium text-muted-foreground/90">
+              <MessageSquare className="h-3 w-3" />
+              Recent
             </div>
-            <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="space-y-1">
               {recents.map((c) => (
                 <button
                   key={c.id}
                   onClick={() => navigate(`/c/${c.id}`)}
-                  className="hover-elevate active-elevate-2 group rounded-2xl border border-border bg-gradient-to-br from-card/70 to-card/40 p-4 text-left shadow-sm backdrop-blur transition"
+                  className="hover-elevate flex w-full items-center gap-3 rounded-xl border border-border/40 bg-card/30 px-4 py-2.5 text-left text-[13px] text-foreground/80 backdrop-blur transition hover:bg-card/60"
                 >
-                  <div className="mb-1.5 flex items-center gap-1.5 text-muted-foreground">
-                    <MessageSquare className="h-3.5 w-3.5" />
-                  </div>
-                  <div className="line-clamp-2 text-[13px] font-medium text-card-foreground">
-                    {c.title || "Untitled"}
-                  </div>
-                  <div className="mt-2 text-[11px] text-muted-foreground">
-                    {relativeTime(c.updatedAt ?? c.createdAt)}
-                  </div>
+                  <MessageSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
+                  <span className="flex-1 truncate">{c.title || "Untitled"}</span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground/50">
+                    {relativeTime((c as { updatedAt?: string; createdAt?: string }).updatedAt ?? (c as { createdAt?: string }).createdAt)}
+                  </span>
                 </button>
               ))}
             </div>

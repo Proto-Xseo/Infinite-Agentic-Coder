@@ -18,7 +18,7 @@ const MODELS: Array<{ id: string; label: string; sub?: string }> = [
 
 const DEFAULT_FOLDERS: Array<{ id: string; label: string; sub?: string }> = [
   { id: "sandbox", label: "Sandbox", sub: "Per-conversation isolated workspace" },
-  { id: "project", label: "Project root", sub: "Read-only view of this Replit" },
+  { id: "project", label: "Project root", sub: "Full read/write access to this Replit" },
 ];
 
 export type ChatSettings = {
@@ -60,7 +60,7 @@ export function ChatInput({
   showHeader = true,
   large = false,
 }: {
-  onSend: (text: string) => void;
+  onSend: (text: string, settings: ChatSettings) => void;
   onStop?: () => void;
   disabled?: boolean;
   placeholder?: string;
@@ -78,7 +78,7 @@ export function ChatInput({
   const submit = () => {
     const trimmed = value.trim();
     if (!trimmed || disabled) return;
-    onSend(trimmed);
+    onSend(trimmed, settings);
     setValue("");
     if (ref.current) ref.current.style.height = "auto";
   };
