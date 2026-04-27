@@ -12,6 +12,14 @@ const ORCHESTRATOR_MODEL = "claude-sonnet-4-6";
 const SUBAGENT_MODEL = "claude-sonnet-4-6";
 const MAX_TURNS = 40;
 const MAX_SUBAGENT_TURNS = 20;
+// Bumped from 16384 → 32768 because the orchestrator prompt encourages emitting
+// many write_file calls in a single response. With 16k, large/multi-file writes
+// would exhaust the budget mid-`content` field, leaving the tool input JSON
+// truncated. The SDK then surfaces an empty `input` and write_file rejects it
+// with "content field is required", which is the symptom of "agent only patches,
+// can't write new files". 32k removes the cliff for typical project scaffolds.
+const ORCHESTRATOR_MAX_TOKENS = 32768;
+const SUBAGENT_MAX_TOKENS = 32768;
 
 const SANDBOX_BASE = path.resolve(
   process.cwd(),
@@ -106,7 +114,7 @@ async function runSubagent(
   for (let turn = 0; turn < MAX_SUBAGENT_TURNS; turn++) {
     const result = await anthropic.messages.create({
       model: SUBAGENT_MODEL,
-      max_tokens: 16384,
+      max_tokens: SUBAGENT_MAX_TOKENS,
       system: SUBAGENT_SYSTEM(role),
       tools: SUBAGENT_TOOLS,
       messages: subMessages as never,
@@ -292,7 +300,7 @@ router.post("/conversations/:id/messages", async (req, res) => {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       const stream = anthropic.messages.stream({
         model: ORCHESTRATOR_MODEL,
-        max_tokens: 16384,
+        max_tokens: ORCHESTRATOR_MAX_TOKENS,
         system:
           folder === "project"
             ? ORCHESTRATOR_SYSTEM +

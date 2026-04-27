@@ -1,3 +1,16 @@
 <svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect width="180" height="180" rx="36" fill="#FF3C00"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="180" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF6A2B"/>
+      <stop offset="1" stop-color="#D72A00"/>
+    </linearGradient>
+    <linearGradient id="spark" x1="60" y1="40" x2="140" y2="140" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFE7CF"/>
+      <stop offset="1" stop-color="#FFFFFF"/>
+    </linearGradient>
+  </defs>
+  <rect width="180" height="180" rx="40" fill="url(#bg)"/>
+  <path d="M44 56 L70 90 L44 124" stroke="url(#spark)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <rect x="86" y="118" width="56" height="12" rx="6" fill="url(#spark)"/>
+  <path d="M132 38 L137 53 L152 58 L137 63 L132 78 L127 63 L112 58 L127 53 Z" fill="url(#spark)" opacity="0.95"/>
 </svg>
