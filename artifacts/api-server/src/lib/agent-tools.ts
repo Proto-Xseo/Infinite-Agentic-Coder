@@ -433,20 +433,41 @@ function runProcess(
   opts: { cwd: string; timeoutMs: number },
 ): Promise<RunResult> {
   return new Promise((resolve) => {
+    // `detached: true` puts the child into its own process group. That lets us
+    // kill the WHOLE group on timeout (process.kill(-pid)) so backgrounded
+    // grandchildren — e.g. `node serve.js &` — die with the parent bash
+    // instead of leaking and holding the sandbox hostage forever.
     const child = spawn(cmd, args, {
       cwd: opts.cwd,
       env: { ...process.env, FORCE_COLOR: "0" },
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
     });
     let buf = "";
     let timedOut = false;
+    let settled = false;
+    const settle = (text: string, code: number) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ text, code, timedOut });
+    };
+    const killTree = (signal: NodeJS.Signals) => {
+      if (child.pid === undefined) return;
+      try {
+        // Negative pid → kill the whole process group (catches `&` children).
+        process.kill(-child.pid, signal);
+      } catch {
+        try {
+          child.kill(signal);
+        } catch {
+          /* already dead */
+        }
+      }
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // ignore
-      }
+      killTree("SIGKILL");
     }, opts.timeoutMs);
     child.stdout.on("data", (c) => {
       buf += c.toString();
@@ -461,12 +482,17 @@ function runProcess(
       }
     });
     child.on("error", (err) => {
-      clearTimeout(timer);
-      resolve({ text: `spawn error: ${err.message}`, code: -1, timedOut });
+      settle(`spawn error: ${err.message}`, -1);
     });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ text: buf, code: code ?? -1, timedOut });
+    // IMPORTANT: use `"exit"` instead of `"close"`. `"close"` waits for all
+    // stdio streams (including those inherited by backgrounded grandchildren)
+    // to close, so a `node server.js &` would keep the promise pending until
+    // the timeout. `"exit"` fires the moment the bash parent exits, which is
+    // what we want for a foreground tool result.
+    child.on("exit", (code) => {
+      // Reap any leftover backgrounded children so they don't leak.
+      killTree("SIGTERM");
+      settle(buf, code ?? -1);
     });
   });
 }
