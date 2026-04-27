@@ -30,11 +30,18 @@ pnpm workspace monorepo using TypeScript. This is the **Infinite Agentic Coder**
 
 ## Key Commands
 
+- `bash scripts/bootstrap.sh` — one-shot bootstrap for a fresh Repl (verifies env, installs deps, pushes DB schema). See `SETUP.md`.
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
+
+## Setup (new Repl)
+
+Full instructions in `SETUP.md`. Required env vars:
+- `AI_INTEGRATIONS_ANTHROPIC_BASE_URL` + `AI_INTEGRATIONS_ANTHROPIC_API_KEY` — provisioned by asking the agent "set up the Anthropic AI integration" or via Tools → AI → Anthropic.
+- `DATABASE_URL` — created via the Database tool in Replit.
 
 ## Eternity Inbox
 

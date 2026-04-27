@@ -1,73 +1,127 @@
-# Setup — making this project work on a fresh Replit account
+# Infinite Agentic Coder — Setup Guide
 
-This project uses Anthropic's Claude through the **Replit AI Integrations proxy**.
-You do **not** need an Anthropic API key of your own — Replit provisions and
-bills for the connection. The only thing required on a new account is a one-time
-provision of the integration.
+A Claude Code-style agentic coding platform that runs on Replit and uses the
+**Replit Anthropic proxy** — no Anthropic API key of your own required.
 
-## The seamless path (one chat message to the agent)
+---
 
-Open the Replit AI chat in this workspace and say:
+## TL;DR — one command
 
-> set up the Anthropic integration
+In a fresh Repl, after the Anthropic proxy has been provisioned (see below):
 
-That's it. The agent runs `setupReplitAIIntegrations({ integrations: ["anthropic"] })`
-and the platform sets these env vars automatically:
-
-- `AI_INTEGRATIONS_ANTHROPIC_BASE_URL`
-- `AI_INTEGRATIONS_ANTHROPIC_API_KEY`
-
-Then restart the **API Server** workflow and you're done.
-
-## Agent-facing instructions (read this first if you are an agent)
-
-If `AI_INTEGRATIONS_ANTHROPIC_BASE_URL` or `AI_INTEGRATIONS_ANTHROPIC_API_KEY`
-is missing, run the following from the code execution sandbox:
-
-```js
-await setupReplitAIIntegrations({ integrations: ["anthropic"] });
+```bash
+bash scripts/bootstrap.sh
 ```
 
-Then restart the `API Server` workflow. Do not ask the user for an API key —
-this project deliberately does NOT support a user-supplied `ANTHROPIC_API_KEY`.
-The only supported credential source is the Replit proxy.
+That installs everything, pushes the database schema, and prints how to start
+the app. The two long-running workflows (`artifacts/api-server: API Server`
+and `artifacts/coding-agent: web`) are already configured — they auto-start
+once dependencies are installed.
 
-## Why no fallback to a user API key
+---
 
-Earlier the client supported `ANTHROPIC_API_KEY` as a fallback. That was removed
-on purpose: the user wants the Replit proxy to be the single source of truth so
-billing stays on Replit and there's nothing to copy/paste between accounts.
-Don't reintroduce the fallback.
+## What you need before running the script
 
-## After cloning / forking on a new account, the full flow
+| Requirement                      | How to get it                                                                 |
+| -------------------------------- | ----------------------------------------------------------------------------- |
+| Replit account (any plan)        | Sign up at replit.com                                                         |
+| `AI_INTEGRATIONS_ANTHROPIC_*`    | Enable the Anthropic proxy — see the next section                             |
+| `DATABASE_URL` (Postgres)        | Open the **Database** tool in the left sidebar → "Create a database"          |
 
-1. `pnpm install`
-2. Tell the agent: "set up the Anthropic integration" (or run the JS snippet
-   above yourself if you are the agent).
-3. `pnpm --filter @workspace/db run push` (creates the `conversations` and
-   `messages` tables).
-4. Make sure `SESSION_SECRET` is set as a secret (any random string works).
-5. Start the workflows. The platform should auto-start them based on
-   `artifact.toml` files in `artifacts/*/.replit-artifact/`.
+The bootstrap script checks all three and tells you exactly what is missing.
 
-## Other env vars this project uses
+---
 
-| Var | Required | Purpose |
-| --- | --- | --- |
-| `DATABASE_URL` | yes | Postgres connection (Replit auto-sets this) |
-| `SESSION_SECRET` | yes | Express session secret |
-| `AI_INTEGRATIONS_ANTHROPIC_BASE_URL` | yes | Set by `setupReplitAIIntegrations` |
-| `AI_INTEGRATIONS_ANTHROPIC_API_KEY`  | yes | Set by `setupReplitAIIntegrations` |
-| `PORT` | per-workflow | Service port (set by workflow / artifact.toml) |
-| `BASE_PATH` | per-workflow | Path prefix for the artifact |
-| `AGENT_SANDBOX_BASE` | optional | Per-conversation sandbox dir (default `.sandboxes`) |
+## How the Replit Anthropic proxy works
 
-## Troubleshooting
+Replit ships a managed Anthropic proxy. When you enable it, Replit injects two
+environment variables into your Repl's Secrets:
 
-- **API Server crashes on boot with "Anthropic AI integration is not provisioned"**
-  → run the one-step provision above.
-- **Anthropic calls return 401** → the integration was deprovisioned; re-run the
-  one-step provision and restart the API Server.
-- **Switched accounts and nothing works** → that's expected. The Replit
-  integration is per-workspace, not per-codebase. Re-run the one-step provision
-  on the new account. No other manual config is needed.
+```
+AI_INTEGRATIONS_ANTHROPIC_BASE_URL   # the proxy URL (e.g. https://...)
+AI_INTEGRATIONS_ANTHROPIC_API_KEY    # a placeholder string used by the SDK
+```
+
+The Anthropic SDK is then constructed exactly as usual:
+
+```ts
+import Anthropic from "@anthropic-ai/sdk";
+
+export const anthropic = new Anthropic({
+  apiKey:  process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
+  baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
+});
+```
+
+Calls go to the proxy, which forwards to Anthropic and bills the usage to your
+**Replit credits** — you never enter an Anthropic key.
+
+### Enabling the proxy in any new Repl (or any new account)
+
+You have two options. Pick whichever is convenient.
+
+#### Option A — Ask the Replit Agent (recommended, takes 5 seconds)
+
+1. Open the chat sidebar (the Agent panel).
+2. Type:
+
+   > set up the Anthropic AI integration
+
+3. The agent runs `setupReplitAIIntegrations({ providerSlug: "anthropic" })`,
+   which provisions the proxy and writes both env vars into Secrets.
+4. Run `bash scripts/bootstrap.sh`.
+
+#### Option B — Use the Tools UI (no agent involved)
+
+1. Open the **Tools** panel on the left sidebar of your Repl.
+2. Click **+ New Tool**, then choose **AI**.
+3. Pick **Anthropic** and confirm.
+4. The two env vars appear under **Secrets** (`AI_INTEGRATIONS_ANTHROPIC_*`).
+5. Run `bash scripts/bootstrap.sh`.
+
+> Both env vars must be present for the API server to boot. The bootstrap
+> script verifies them before doing anything else.
+
+---
+
+## Available models
+
+The proxy supports the full Claude family. Defaults used in this app:
+
+| Model                | Use                                            |
+| -------------------- | ---------------------------------------------- |
+| `claude-sonnet-4-6`  | **Default** — balanced reasoning + speed       |
+| `claude-opus-4-7`    | Most capable, slowest, highest cost            |
+| `claude-haiku-4-5`   | Fastest + cheapest for trivial tasks           |
+
+Change the model in `artifacts/api-server/src/routes/anthropic/messages.ts`.
+
+---
+
+## What the bootstrap script does
+
+```
+1/5  Checking toolchain                  → node + pnpm present
+2/5  Checking Anthropic proxy creds      → both env vars set
+3/5  Checking database                   → DATABASE_URL set
+4/5  Installing workspace dependencies   → pnpm install
+5/5  Pushing database schema             → pnpm --filter @workspace/db run push
+```
+
+Run it as many times as you like — it's idempotent.
+
+---
+
+## Cloning into a brand-new Repl from scratch
+
+```bash
+# 1. Fork or import this repo into a new Replit project.
+# 2. Open the Database tool → Create a database.       (sets DATABASE_URL)
+# 3. Open the chat sidebar and ask the agent:
+#       "set up the Anthropic AI integration"          (sets AI_INTEGRATIONS_*)
+# 4. In the shell:
+       bash scripts/bootstrap.sh
+# 5. The two workflows auto-start — open the preview pane and chat.
+```
+
+That's it.
