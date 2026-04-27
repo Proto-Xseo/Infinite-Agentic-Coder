@@ -1,16 +1,20 @@
 <svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="180" y2="180" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#FF6A2B"/>
-      <stop offset="1" stop-color="#D72A00"/>
+      <stop offset="0" stop-color="#F4ECE0"/>
+      <stop offset="1" stop-color="#E9DDC9"/>
     </linearGradient>
-    <linearGradient id="spark" x1="60" y1="40" x2="140" y2="140" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#FFE7CF"/>
-      <stop offset="1" stop-color="#FFFFFF"/>
+    <linearGradient id="star" x1="40" y1="40" x2="140" y2="140" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D97757"/>
+      <stop offset="1" stop-color="#B14A2C"/>
     </linearGradient>
   </defs>
   <rect width="180" height="180" rx="40" fill="url(#bg)"/>
-  <path d="M44 56 L70 90 L44 124" stroke="url(#spark)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-  <rect x="86" y="118" width="56" height="12" rx="6" fill="url(#spark)"/>
-  <path d="M132 38 L137 53 L152 58 L137 63 L132 78 L127 63 L112 58 L127 53 Z" fill="url(#spark)" opacity="0.95"/>
+  <path d="
+      M90 22
+      C 92 60, 100 76, 158 90
+      C 100 104, 92 120, 90 158
+      C 88 120, 80 104, 22 90
+      C 80 76, 88 60, 90 22 Z"
+    fill="url(#star)"/>
 </svg>
