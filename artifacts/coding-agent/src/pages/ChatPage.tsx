@@ -86,8 +86,13 @@ export default function ChatPage() {
   const activeConvIdRef = useRef<number | null>(null);
 
   useEffect(() => {
-    setLiveItems([]);
-    setStreaming(false);
+    // Only reset state when navigating to a *different* conversation,
+    // not when our own handleSend updates the URL via history.replaceState.
+    // We detect this by checking if we are the active streaming conversation.
+    if (conversationId !== activeConvIdRef.current) {
+      setLiveItems([]);
+      setStreaming(false);
+    }
   }, [conversationId]);
 
   useEffect(() => {
@@ -254,7 +259,6 @@ export default function ChatPage() {
         rafId = 0;
         flushText();
       }
-      setStreaming(false);
       abortRef.current = null;
       const finalId = activeConvIdRef.current ?? activeId;
       if (finalId) {
@@ -263,6 +267,9 @@ export default function ChatPage() {
         // Now sync wouter's router state (URL already matches so this is a no-op visually)
         navigate(`/c/${finalId}`);
       }
+      // Only mark streaming as done AFTER invalidation + navigation,
+      // so the Stop button stays visible the entire time.
+      setStreaming(false);
       setLiveItems([]);
     }
 

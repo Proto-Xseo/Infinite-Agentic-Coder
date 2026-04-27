@@ -1,0 +1,26 @@
+[
+  {
+    "text": "Research Claude Code MCP, connectors, plugins, and skills systems",
+    "done": false
+  },
+  {
+    "text": "Explore current codebase structure in depth",
+    "done": false
+  },
+  {
+    "text": "Architect the MCP tools, connectors, plugins, and skills systems",
+    "done": false
+  },
+  {
+    "text": "Implement the backend (MCP protocol, connector registry, plugin loader, skills engine)",
+    "done": false
+  },
+  {
+    "text": "Implement the frontend UI (MCP panel, connectors UI, plugins marketplace, skills library)",
+    "done": false
+  },
+  {
+    "text": "Wire everything together and verify build",
+    "done": false
+  }
+]
